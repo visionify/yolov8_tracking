@@ -44,6 +44,7 @@ from trackers.multi_tracker_zoo import create_tracker
 
 @torch.no_grad()
 def run(
+        alert_time=0,
         source='0',
         yolo_weights=WEIGHTS / 'yolov5m.pt',  # model.pt path(s),
         reid_weights=WEIGHTS / 'osnet_x0_25_msmt17.pt',  # model.pt path,
@@ -144,8 +145,12 @@ def run(
     #model.warmup(imgsz=(1 if pt else bs, 3, *imgsz))  # warmup
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile(), Profile())
     curr_frames, prev_frames = [None] * bs, [None] * bs
+    duration_dic = {}
+
     for frame_idx, batch in enumerate(dataset):
         path, im, im0s, vid_cap, s = batch
+        fps_vid = vid_cap.get(cv2.CAP_PROP_FPS)
+
         visualize = increment_path(save_dir / Path(path[0]).stem, mkdir=True) if visualize else False
         with dt[0]:
             im = torch.from_numpy(im).to(device)
@@ -240,6 +245,11 @@ def run(
                         cls = output[5]
                         conf = output[6]
 
+                        if id in duration_dic:
+                            duration_dic[id] += 1 
+                        else:
+                            duration_dic[id] = 1
+
                         if save_txt:
                             # to MOT format
                             bbox_left = output[0]
@@ -254,8 +264,12 @@ def run(
                         if save_vid or save_crop or show_vid:  # Add bbox/seg to image
                             c = int(cls)  # integer class
                             id = int(id)  # integer id
-                            label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
-                                (f'{id} {conf:.2f}' if hide_class else f'{id} {names[c]} {conf:.2f}'))
+                            if (duration_dic[id]/fps_vid) > alert_time:
+                                label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
+                                    (f'{id} {conf:.2f}' if hide_class else f' {id} - {duration_dic[id]/fps_vid:.2f} - {" ALERT"}'))
+                            else:
+                                label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
+                                    (f'{id} {conf:.2f}' if hide_class else f' {id} - {duration_dic[id]/fps_vid:.2f}'))
                             color = colors(c, True)
                             annotator.box_label(bbox, label, color=color)
                             
@@ -323,6 +337,7 @@ def parse_opt():
     parser.add_argument('--conf-thres', type=float, default=0.5, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.5, help='NMS IoU threshold')
     parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
+    parser.add_argument('--alert-time', type=int, default=0, help='Time for alert')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--show-vid', action='store_true', help='display tracking video results')
     parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
